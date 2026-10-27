@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="launcher_vibe_coded">Port não oficial e vibe coded: espere bugs.</string>
+    <string name="launcher_intro">Antes de jogar, escolha a sua própria imagem do disco (ISO ou RVZ) e o módulo do jogo exportado para Android pelo Luigi\'s Mansion Recompiled no PC.</string>
+    <string name="launcher_pick_disc">Escolher imagem do disco (ISO / RVZ)</string>
+    <string name="launcher_pick_module">Escolher módulo do jogo (lm_game_*.so)</string>
+    <string name="launcher_play">Jogar</string>
+    <string name="launcher_folder">Os arquivos ficam em %1$s</string>
+    <string name="launcher_disc_ready">Disco: %1$s</string>
+    <string name="launcher_disc_missing">Disco: ainda não escolhido</string>
+    <string name="launcher_module_ready">Módulo do jogo: %1$s</string>
+    <string name="launcher_module_missing">Módulo do jogo: ainda não escolhido</string>
+    <string name="launcher_copying">Copiando para o app…</string>
+    <string name="launcher_copy_failed">Não foi possível copiar o arquivo.</string>
+    <string name="launcher_disc_imported">Disco importado: %1$s</string>
+    <string name="launcher_module_imported">Módulo do jogo importado (%1$s).</string>
+    <string name="launcher_not_module">Este arquivo não é um módulo do jogo exportado para Android.</string>
+    <string name="launcher_module_not_disc">Esse é o módulo do jogo; escolha ele no outro botão.</string>
+</resources>

@@ -40,8 +40,24 @@ fi
 APP="$ROOT/packaging/android/app"
 rm -rf "$APP/jniLibs" "$APP/sdl-java" "$APP/aurora-java" "$APP/assets"
 mkdir -p "$APP/jniLibs/arm64-v8a" "$APP/assets"
-cp "$BUILD/libmain.so" "$APP/jniLibs/arm64-v8a/libmain.so"
-"$NDK/toolchains/llvm/prebuilt/"*/bin/llvm-strip --strip-debug "$APP/jniLibs/arm64-v8a/libmain.so" || true
+NDK_BIN="$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin)"
+SYSTEM_LIBS=" libc.so libm.so libdl.so liblog.so libandroid.so libvulkan.so libEGL.so libGLESv1_CM.so libGLESv2.so libGLESv3.so libOpenSLES.so libaaudio.so libz.so libjnigraphics.so libmediandk.so libnativewindow.so libsync.so "
+copy_lib() {
+    cp "$1" "$APP/jniLibs/arm64-v8a/$(basename "$1")"
+    "$NDK_BIN/llvm-strip" --strip-debug "$APP/jniLibs/arm64-v8a/$(basename "$1")" || true
+    for dep in $("$NDK_BIN/llvm-readelf" -d "$1" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
+        case "$SYSTEM_LIBS" in *" $dep "*) continue ;; esac
+        [ -f "$APP/jniLibs/arm64-v8a/$dep" ] && continue
+        found="$(find "$BUILD" "$NDK_SYSROOT/usr/lib/aarch64-linux-android" -name "$dep" -type f 2>/dev/null | head -n 1)"
+        if [ -z "$found" ]; then
+            echo "libmain.so needs $dep, which was not found" >&2
+            exit 1
+        fi
+        echo "Packaging $dep"
+        copy_lib "$found"
+    done
+}
+copy_lib "$BUILD/libmain.so"
 cp -R "$SDL_JAVA" "$APP/sdl-java"
 cp -R "$AURORA_JAVA" "$APP/aurora-java"
 find "$APP/aurora-java" -type f ! -name '*.java' -delete

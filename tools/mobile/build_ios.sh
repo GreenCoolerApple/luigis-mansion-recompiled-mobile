@@ -25,6 +25,10 @@ if [ -z "$APP" ]; then
 fi
 mkdir -p "$APP/Frameworks"
 cp "$ROOT/data/pipelines.bin" "$APP/pipelines.bin"
+for icon in "$ROOT"/packaging/ios/icons/AppIcon*.png; do
+    case "$icon" in *AppIcon1024.png) continue ;; esac
+    cp "$icon" "$APP/"
+done
 strip -S "$APP/LuigisMansionRecomp" || true
 
 STAGE="$BUILD/ipa"

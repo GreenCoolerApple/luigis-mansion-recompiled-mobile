@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Luigi\'s Mansion</string>
+    <string name="launcher_vibe_coded">Unofficial, vibe coded port: expect bugs.</string>
+    <string name="launcher_intro">Before playing, choose your own disc image (ISO or RVZ) and the game module exported for Android by Luigi\'s Mansion Recompiled on a PC.</string>
+    <string name="launcher_pick_disc">Choose disc image (ISO / RVZ)</string>
+    <string name="launcher_pick_module">Choose game module (lm_game_*.so)</string>
+    <string name="launcher_play">Play</string>
+    <string name="launcher_folder">Files are kept in %1$s</string>
+    <string name="launcher_disc_ready">Disc: %1$s</string>
+    <string name="launcher_disc_missing">Disc: not chosen yet</string>
+    <string name="launcher_module_ready">Game module: %1$s</string>
+    <string name="launcher_module_missing">Game module: not chosen yet</string>
+    <string name="launcher_copying">Copying into the app…</string>
+    <string name="launcher_copy_failed">Could not copy the file.</string>
+    <string name="launcher_disc_imported">Disc imported: %1$s</string>
+    <string name="launcher_module_imported">Game module imported (%1$s).</string>
+    <string name="launcher_not_module">This is not a game module exported for Android.</string>
+    <string name="launcher_module_not_disc">That is the game module; choose it with the other button.</string>
 </resources>
