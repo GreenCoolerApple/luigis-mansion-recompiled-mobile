@@ -53,6 +53,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.12'
+          validate-wrappers: false
       - name: Build
         run: |
           export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
