@@ -22,6 +22,9 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DLM_HOST_CXX="${LM_HOST_CXX:-c++}" \
     ${LM_CMAKE_ARGS:-}
+NDK_SYSROOT="$(echo "$NDK"/toolchains/llvm/prebuilt/*/sysroot)"
+export CFLAGS_aarch64_linux_android="--target=aarch64-linux-android29 --sysroot=$NDK_SYSROOT"
+export CXXFLAGS_aarch64_linux_android="--target=aarch64-linux-android29 --sysroot=$NDK_SYSROOT"
 cmake --build "$BUILD" --target LuigisMansionRecomp
 
 cache_value() {
