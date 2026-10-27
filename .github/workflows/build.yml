@@ -1,8 +1,3 @@
-# Builds and packages the shipped program (LuigisMansionRecomp: setup + runtime + the bundled
-# clang/lld that setup compiles the game with) for Windows, Linux and macOS. No game data is
-# involved: the lmrecomp dev build needs the user's main.dol and is skipped.
-# Packages are named like the release assets the in-game updater expects:
-#   LuigisMansionRecompiled-<version>-windows-x64.zip / -linux-x86_64.tar.gz / -macos-arm64.tar.gz
 name: Build
 
 on:
@@ -10,9 +5,8 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-  workflow_dispatch:  # other branches: gh workflow run build.yml --ref <branch>
+  workflow_dispatch:
 
-# Read-only token: the jobs only check out the code and upload artifacts.
 permissions:
   contents: read
 
@@ -21,157 +15,37 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LLVM_VERSION: 23.1.4  # official LLVM release bundled on Linux and macOS (self-contained clang/lld)
-  # sha256 of the release archives (GitHub's digests of the llvmorg-23.1.4 assets); update both
-  # with LLVM_VERSION: gh api repos/llvm/llvm-project/releases/tags/llvmorg-<ver> --jq '.assets[]|.name+" "+.digest'
-  LLVM_SHA256_LINUX_X64: efdd1dbd089b99bfcfcde7b8eb1236163f2e88df5a981cca4f783ec9cb5e0378
-  LLVM_SHA256_MACOS_ARM64: 0f8b0db925ab54a63028d788e85b14abaa25492e9608819728c17f6786948da4
-  NINJA_VERSION: 1.13.0
+  CCACHE_COMPILERCHECK: content
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+  LM_CMAKE_ARGS: -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
 
 jobs:
-  windows:
-    name: Windows x64
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Ninja
-        run: pip install "ninja==${{ env.NINJA_VERSION }}"
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1
-        with:
-          arch: x64
-      - name: Configure
-        # The runner's LLVM (official Windows build, self-contained) is bundled.
-        run: cmake --preset windows-clang "-DLM_LLVM_DIR=C:/Program Files/LLVM/bin"
-      - name: Build
-        run: cmake --build build/windows-clang --target LuigisMansionRecomp
-      - name: Package
-        shell: pwsh
-        run: |
-          $m = Select-String -Path CMakeLists.txt -Pattern 'project\(lmport .*VERSION ([0-9.]+)\)' | Select-Object -First 1
-          $version = $m.Matches[0].Groups[1].Value
-          $name = "LuigisMansionRecompiled-$version-windows-x64"
-          cmake --install build/windows-clang --prefix "out/$name"
-          if ($LASTEXITCODE) { throw "cmake --install failed" }
-          foreach ($f in @("LuigisMansionRecomp.exe", "pipelines.bin", "llvm\bin\clang.exe", "llvm\bin\lld-link.exe")) {
-            if (-not (Test-Path "out/$name/$f")) { throw "package is missing $f" }
-          }
-          & "out/$name/llvm/bin/clang.exe" --version
-          Compress-Archive -Path "out/$name" -DestinationPath "out/$name.zip"
-          Get-FileHash -Algorithm SHA256 "out/$name.zip"
-          "PKG=out/$name.zip" >> $env:GITHUB_ENV
-          "PKG_NAME=$name.zip" >> $env:GITHUB_ENV
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PKG_NAME }}
-          path: ${{ env.PKG }}
-          if-no-files-found: error
-
-  linux:
-    name: Linux x86_64
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build pkg-config zip patchelf zstd \
-            libvulkan-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev \
-            libxss-dev libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
-            libdecor-0-dev libegl-dev libgl-dev libgles-dev libasound2-dev libpulse-dev \
-            libpipewire-0.3-dev libdbus-1-dev libudev-dev libibus-1.0-dev libdrm-dev libgbm-dev libusb-1.0-0-dev
-      - name: LLVM to bundle (cache)
-        id: llvm
-        uses: actions/cache@v4
-        with:
-          path: llvm-bundle
-          key: llvm-${{ env.LLVM_VERSION }}-linux-x64-${{ env.LLVM_SHA256_LINUX_X64 }}
-      - name: LLVM to bundle (download)
-        if: steps.llvm.outputs.cache-hit != 'true'
-        run: |
-          n=LLVM-$LLVM_VERSION-Linux-X64
-          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/$n.tar.zst" -o llvm.tar.zst
-          echo "$LLVM_SHA256_LINUX_X64  llvm.tar.zst" | sha256sum -c -
-          mkdir -p llvm-bundle
-          # LLVM's archives use a long zstd window (--long=31).
-          zstd -dc --long=31 llvm.tar.zst | tar -x -C llvm-bundle --strip-components=1 --wildcards "$n/bin/clang*" "$n/bin/lld" "$n/bin/ld.lld"
-          rm llvm.tar.zst
-          ls -la llvm-bundle/bin
-      - name: Build and package
-        run: tools/package_linux.sh "$PWD/llvm-bundle/bin" "$PWD/out"
-      - name: Name
-        run: |
-          v=$(sed -nE 's/^project\(lmport .*VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)
-          mv out/LuigisMansionRecompiled-linux-x86_64.tar.gz "out/LuigisMansionRecompiled-$v-linux-x86_64.tar.gz"
-          sha256sum out/*.tar.gz
-          echo "PKG=out/LuigisMansionRecompiled-$v-linux-x86_64.tar.gz" >> "$GITHUB_ENV"
-          echo "PKG_NAME=LuigisMansionRecompiled-$v-linux-x86_64.tar.gz" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PKG_NAME }}
-          path: ${{ env.PKG }}
-          if-no-files-found: error
-
-  macos:
-    name: macOS arm64
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Dependencies
-        # Aurora needs std::jthread: the newest Xcode on the image. The program itself links
-        # no Homebrew library (macos-clang preset); ninja and zstd are build tools only.
-        run: |
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
-          clang --version | head -1
-          brew install ninja zstd
-      - name: LLVM to bundle (cache)
-        id: llvm
-        uses: actions/cache@v4
-        with:
-          path: llvm-bundle
-          key: llvm-${{ env.LLVM_VERSION }}-macos-arm64-${{ env.LLVM_SHA256_MACOS_ARM64 }}
-      - name: LLVM to bundle (download)
-        if: steps.llvm.outputs.cache-hit != 'true'
-        run: |
-          n=LLVM-$LLVM_VERSION-macOS-ARM64
-          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/$n.tar.zst" -o llvm.tar.zst
-          echo "$LLVM_SHA256_MACOS_ARM64  llvm.tar.zst" | shasum -a 256 -c -
-          mkdir -p llvm-bundle
-          zstd -dc --long=31 llvm.tar.zst | tar -x -C llvm-bundle --strip-components=1 --include "$n/bin/clang*" --include "$n/bin/lld" --include "$n/bin/ld64.lld"
-          rm llvm.tar.zst
-          ls -la llvm-bundle/bin
-      - name: Build and package
-        run: tools/package_macos.sh "$PWD/llvm-bundle/bin" "$PWD/out"
-      - name: Name
-        run: |
-          v=$(sed -nE 's/^project\(lmport .*VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)
-          mv out/LuigisMansionRecompiled-macos-arm64.tar.gz "out/LuigisMansionRecompiled-$v-macos-arm64.tar.gz"
-          shasum -a 256 out/*.tar.gz
-          echo "PKG=out/LuigisMansionRecompiled-$v-macos-arm64.tar.gz" >> "$GITHUB_ENV"
-          echo "PKG_NAME=LuigisMansionRecompiled-$v-macos-arm64.tar.gz" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PKG_NAME }}
-          path: ${{ env.PKG }}
-          if-no-files-found: error
-
   android:
     name: Android arm64
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
-      - name: Dependencies
+          submodules: true
+      - name: Tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build zip
+          pip install ninja
           rustup target add aarch64-linux-android
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-arm64
+          max-size: 2G
+      - name: Build folder (cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/android-arm64
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: android-build-${{ hashFiles('extern/aurora/cmake/AuroraDependencyVersions.cmake', 'CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            android-build-${{ hashFiles('extern/aurora/cmake/AuroraDependencyVersions.cmake', 'CMakeLists.txt') }}-
+            android-build-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -187,7 +61,9 @@ jobs:
           export CXX_aarch64_linux_android="$tc/aarch64-linux-android29-clang++"
           export AR_aarch64_linux_android="$tc/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$tc/aarch64-linux-android29-clang"
+          export CARGO_INCREMENTAL=0
           tools/mobile/build_android.sh
+          ccache -s
       - name: Name
         run: |
           v=$(sed -nE 's/^project\(lmport .*VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)
@@ -199,6 +75,7 @@ jobs:
           name: ${{ env.PKG_NAME }}
           path: ${{ env.PKG }}
           if-no-files-found: error
+          compression-level: 0
 
   ios:
     name: iOS arm64 (unsigned)
@@ -206,15 +83,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
-      - name: Dependencies
+          submodules: true
+      - name: Tools
         run: |
           sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
           clang --version | head -1
           brew install ninja
           rustup target add aarch64-apple-ios
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ios-arm64
+          max-size: 2G
+      - name: Build folder (cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/ios-arm64
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ios-build-${{ hashFiles('extern/aurora/cmake/AuroraDependencyVersions.cmake', 'CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            ios-build-${{ hashFiles('extern/aurora/cmake/AuroraDependencyVersions.cmake', 'CMakeLists.txt') }}-
+            ios-build-
       - name: Build
-        run: tools/mobile/build_ios.sh
+        run: |
+          export CARGO_INCREMENTAL=0
+          tools/mobile/build_ios.sh
+          ccache -s
       - name: Name
         run: |
           v=$(sed -nE 's/^project\(lmport .*VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)
@@ -226,3 +121,4 @@ jobs:
           name: ${{ env.PKG_NAME }}
           path: ${{ env.PKG }}
           if-no-files-found: error
+          compression-level: 0

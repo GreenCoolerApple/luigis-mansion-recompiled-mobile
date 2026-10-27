@@ -20,7 +20,8 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
     -DANDROID_PLATFORM=android-29 \
     -DANDROID_STL=c++_static \
     -DCMAKE_BUILD_TYPE=Release \
-    -DLM_HOST_CXX="${LM_HOST_CXX:-c++}"
+    -DLM_HOST_CXX="${LM_HOST_CXX:-c++}" \
+    ${LM_CMAKE_ARGS:-}
 cmake --build "$BUILD" --target LuigisMansionRecomp
 
 cache_value() {

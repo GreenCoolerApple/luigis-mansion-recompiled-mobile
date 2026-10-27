@@ -14,7 +14,8 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
     -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON \
-    -DLM_HOST_CXX="${LM_HOST_CXX:-/usr/bin/clang++}"
+    -DLM_HOST_CXX="${LM_HOST_CXX:-/usr/bin/clang++}" \
+    ${LM_CMAKE_ARGS:-}
 cmake --build "$BUILD" --target LuigisMansionRecomp
 
 APP="$(find "$BUILD" -maxdepth 2 -name 'LuigisMansionRecomp.app' -type d | head -n 1)"
