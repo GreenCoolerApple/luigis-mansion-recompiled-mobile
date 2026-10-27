@@ -1,0 +1,8 @@
+.gradle/
+build/
+app/build/
+app/jniLibs/
+app/sdl-java/
+app/aurora-java/
+app/assets/
+local.properties

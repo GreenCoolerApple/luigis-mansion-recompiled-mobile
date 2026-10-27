@@ -159,3 +159,70 @@ jobs:
           name: ${{ env.PKG_NAME }}
           path: ${{ env.PKG }}
           if-no-files-found: error
+
+  android:
+    name: Android arm64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build zip
+          rustup target add aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.12'
+      - name: Build
+        run: |
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
+          tc="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$tc/aarch64-linux-android29-clang"
+          export CXX_aarch64_linux_android="$tc/aarch64-linux-android29-clang++"
+          export AR_aarch64_linux_android="$tc/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$tc/aarch64-linux-android29-clang"
+          tools/mobile/build_android.sh
+      - name: Name
+        run: |
+          v=$(sed -nE 's/^project\(lmport .*VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)
+          sha256sum build/*.apk
+          echo "PKG=build/LuigisMansionRecompiled-$v-android-arm64.apk" >> "$GITHUB_ENV"
+          echo "PKG_NAME=LuigisMansionRecompiled-$v-android-arm64.apk" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG_NAME }}
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+  ios:
+    name: iOS arm64 (unsigned)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Dependencies
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          clang --version | head -1
+          brew install ninja
+          rustup target add aarch64-apple-ios
+      - name: Build
+        run: tools/mobile/build_ios.sh
+      - name: Name
+        run: |
+          v=$(sed -nE 's/^project\(lmport .*VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)
+          shasum -a 256 build/*.ipa
+          echo "PKG=build/LuigisMansionRecompiled-$v-ios-arm64-unsigned.ipa" >> "$GITHUB_ENV"
+          echo "PKG_NAME=LuigisMansionRecompiled-$v-ios-arm64-unsigned.ipa" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG_NAME }}
+          path: ${{ env.PKG }}
+          if-no-files-found: error

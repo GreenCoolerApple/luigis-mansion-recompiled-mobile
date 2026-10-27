@@ -398,7 +398,11 @@ struct Config {
     std::array<PortConfig, PAD_MAX_CONTROLLERS> ports;
     Profile keyboard = keyboardDefaults();
     std::map<std::string, Profile> pads;  // by SDL GUID
+#ifdef LM_MOBILE
+    Config() { ports[0].keyboard = false; }
+#else
     Config() { ports[0].keyboard = true; }
+#endif
 };
 
 std::recursive_mutex sMutex;  // menu (host thread) vs PADRead (guest thread)

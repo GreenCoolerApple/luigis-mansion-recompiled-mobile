@@ -5,6 +5,26 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if (ANDROID OR IOS)
+    set(LM_MOBILE ON)
+    set(AURORA_SDL3_PROVIDER vendor CACHE STRING "" FORCE)
+    set(AURORA_SDL3_LINKAGE static CACHE STRING "" FORCE)
+    set(AURORA_NOD_PROVIDER vendor CACHE STRING "" FORCE)
+    set(AURORA_NOD_LINKAGE static CACHE STRING "" FORCE)
+    set(AURORA_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    if (ANDROID)
+        set(Rust_CARGO_TARGET "aarch64-linux-android" CACHE STRING "" FORCE)
+    else ()
+        if (CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+            set(Rust_CARGO_TARGET "aarch64-apple-ios-sim" CACHE STRING "" FORCE)
+        else ()
+            set(Rust_CARGO_TARGET "aarch64-apple-ios" CACHE STRING "" FORCE)
+        endif ()
+    endif ()
+else ()
+    set(LM_MOBILE OFF)
+endif ()
+
 set(AURORA_ENABLE_DVD ON CACHE BOOL "" FORCE)
 set(AURORA_ENABLE_CARD ON CACHE BOOL "" FORCE)
 # Local fixes to Aurora, kept as patches so the submodule stays pristine.
@@ -85,14 +105,16 @@ endforeach ()
 # each unit is made to compile against Aurora (see docs/ROADMAP.md, Phase 1).
 file(GLOB PORT_SOURCES CONFIGURE_DEPENDS src/port/*.cpp src/port/os/*.cpp src/helpers/*.cpp)
 file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp)
+if (NOT LM_MOBILE)
 add_executable(lmport ${PORT_SOURCES} ${GAME_SOURCES})
 target_include_directories(lmport PRIVATE src)
 target_link_libraries(lmport PRIVATE aurora::main ${GAME_LIBS} ${JSYSTEM_LIBRARIES})
 if (WIN32)
     target_link_libraries(lmport PRIVATE dbghelp winhttp bcrypt)
 endif ()
+endif ()
 
-if (WIN32)
+if (WIN32 AND TARGET lmport)
     # Ship runtime DLLs (SDL3, Dawn, nod, libpng, zlib) next to the executable.
     # dxcompiler/dxil are loaded dynamically by Dawn's D3D12 backend, so they are
     # not part of TARGET_RUNTIME_DLLS and must be copied explicitly.
@@ -110,17 +132,19 @@ endif ()
 # The recompiler (src/recompiler) translates the user's own main.dol into C++. It is
 # linked into the shipped executable (first-run setup) and into the lmrecompile tool the
 # dev build uses. Nothing generated is ever committed.
+if (NOT LM_MOBILE)
 add_library(lm_recompiler STATIC src/recompiler/recompiler.cpp src/recompiler/recompiler.h)
 target_include_directories(lm_recompiler PUBLIC src)
 add_executable(lmrecompile tools/recomp/lmrecompile.cpp)
 target_link_libraries(lmrecompile PRIVATE lm_recompiler)
+endif ()
 
 # Runtime shared by both executables: memory/CPU helpers, scheduler, HLE SDK, frame
 # driver, audio, menu. module_rt.cpp belongs to the game module, not the runtime.
 file(GLOB RECOMP_RUNTIME_SOURCES CONFIGURE_DEPENDS src/recomp/*.cpp)
 list(REMOVE_ITEM RECOMP_RUNTIME_SOURCES ${CMAKE_SOURCE_DIR}/src/recomp/module_rt.cpp)
 list(APPEND RECOMP_RUNTIME_SOURCES src/port/crash_handler.cpp src/port/options.cpp src/port/dol.cpp
-    src/port/settings.cpp src/port/install.cpp src/port/update.cpp src/port/recovery.cpp)
+    src/port/settings.cpp src/port/install.cpp src/port/update.cpp src/port/recovery.cpp src/port/mobile.cpp)
 # The program's version (F1 > Game, the updater's comparison with the latest GitHub release, the
 # game module's cache key; docs/SETUP.md "Updates"). Only this file sees it, so a version bump
 # rebuilds one file.
@@ -130,6 +154,9 @@ function(lm_runtime_target tgt)
     target_include_directories(${tgt} PRIVATE src
         ${CMAKE_SOURCE_DIR}/extern/aurora/include/dolphin ${CMAKE_SOURCE_DIR}/extern/aurora/include)
     target_compile_definitions(${tgt} PRIVATE TARGET_PC=1)
+    if (LM_MOBILE)
+        target_compile_definitions(${tgt} PRIVATE LM_MOBILE=1)
+    endif ()
     target_link_libraries(${tgt} PRIVATE aurora::main aurora::core aurora::gx aurora::vi aurora::pad
         aurora::si aurora::os aurora::dvd aurora::card)
     # Shipped shader/pipeline precache list (tools/pipelines/sweep.py; docs/RENDERING.md).
@@ -146,6 +173,9 @@ function(lm_runtime_target tgt)
             add_custom_command(TARGET ${tgt} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dawn_extra_dlls} $<TARGET_FILE_DIR:${tgt}>)
         endif ()
+    elseif (ANDROID)
+        target_compile_options(${tgt} PRIVATE -ffp-contract=off)
+        target_link_libraries(${tgt} PRIVATE android log ${CMAKE_DL_LIBS})
     elseif (APPLE)
         # macOS (docs/MACOS.md): same reason as the game module's -ffp-contract=off
         # (src/setup/module_builder.cpp): no fused multiply-adds the PowerPC would not do, in
@@ -168,9 +198,35 @@ endfunction()
 # the setup UI; the game itself is a module DLL that setup compiles from the user's disc
 # with the bundled clang + lld (docs/SETUP.md).
 file(GLOB SETUP_SOURCES CONFIGURE_DEPENDS src/setup/*.cpp src/setup/*.h)
-add_executable(LuigisMansionRecomp ${RECOMP_RUNTIME_SOURCES} ${SETUP_SOURCES})
+if (ANDROID)
+    add_library(LuigisMansionRecomp SHARED ${RECOMP_RUNTIME_SOURCES} ${SETUP_SOURCES})
+    set_target_properties(LuigisMansionRecomp PROPERTIES OUTPUT_NAME main)
+    target_link_options(LuigisMansionRecomp PRIVATE "-Wl,-z,max-page-size=16384")
+elseif (IOS)
+    add_executable(LuigisMansionRecomp MACOSX_BUNDLE ${RECOMP_RUNTIME_SOURCES} ${SETUP_SOURCES}
+        ${CMAKE_SOURCE_DIR}/data/pipelines.bin)
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/data/pipelines.bin PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(LuigisMansionRecomp PROPERTIES
+        OUTPUT_NAME LuigisMansionRecomp
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/ios/Info.plist.in
+        MACOSX_BUNDLE_GUI_IDENTIFIER io.github.lmrecompiled.mobile
+        MACOSX_BUNDLE_BUNDLE_NAME "Luigi's Mansion"
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED NO
+        BUILD_RPATH "@executable_path/Frameworks"
+        INSTALL_RPATH "@executable_path/Frameworks")
+    target_link_libraries(LuigisMansionRecomp PRIVATE "-framework UIKit" "-framework Foundation"
+        "-framework Metal" "-framework QuartzCore" "-framework GameController" "-framework CoreHaptics"
+        "-framework AVFoundation" "-framework AudioToolbox" "-framework CoreMotion" "-framework CoreGraphics"
+        "-framework UniformTypeIdentifiers")
+else ()
+    add_executable(LuigisMansionRecomp ${RECOMP_RUNTIME_SOURCES} ${SETUP_SOURCES})
+endif ()
 lm_runtime_target(LuigisMansionRecomp)
-target_link_libraries(LuigisMansionRecomp PRIVATE lm_recompiler)  # nod comes with aurora::dvd
+if (NOT LM_MOBILE)
+    target_link_libraries(LuigisMansionRecomp PRIVATE lm_recompiler)  # nod comes with aurora::dvd
+endif ()
 if (WIN32)
     # A windowed program: no console window opens with the game (output: src/port/recovery.h
     # setupConsole). main() stays the entry point. lmrecomp (dev build) keeps its console.
@@ -179,7 +235,20 @@ if (WIN32)
 endif ()
 # Setup's inputs are embedded in the executable (src/setup/embedded.cpp): symbol maps,
 # hooks, and the game module's freestanding sources.
-add_executable(lmembed tools/recomp/lmembed.cpp)
+if (CMAKE_CROSSCOMPILING)
+    set(LM_HOST_CXX "c++" CACHE STRING "Compiler for build-machine tools when cross-compiling")
+    set(_lmembed ${CMAKE_BINARY_DIR}/host/lmembed${CMAKE_HOST_EXECUTABLE_SUFFIX})
+    file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/host)
+    execute_process(COMMAND ${LM_HOST_CXX} -std=c++20 -O1 ${CMAKE_SOURCE_DIR}/tools/recomp/lmembed.cpp -o ${_lmembed}
+        RESULT_VARIABLE _lmembed_rc)
+    if (NOT _lmembed_rc EQUAL 0)
+        message(FATAL_ERROR "Could not build lmembed for the build machine with ${LM_HOST_CXX}")
+    endif ()
+    set(LM_EMBED_TOOL ${_lmembed})
+else ()
+    add_executable(lmembed tools/recomp/lmembed.cpp)
+    set(LM_EMBED_TOOL lmembed)
+endif ()
 set(LM_EMBEDDED_FILES
     kSymbolsUs=decomp/config/GLME01/symbols.txt kSplitsUs=decomp/config/GLME01/splits.txt
     kSymbolsPal=decomp/config/GLMP01_00/symbols.txt kVersionMapPal=tools/recomp/GLMP01_map.txt
@@ -191,8 +260,8 @@ foreach (_e ${LM_EMBEDDED_FILES})
     list(APPEND _embed_deps ${_f})
 endforeach ()
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/embedded_data.cpp
-    COMMAND lmembed ${CMAKE_BINARY_DIR}/embedded_data.cpp setup::embedded::data ${LM_EMBEDDED_FILES}
-    DEPENDS lmembed ${_embed_deps}
+    COMMAND ${LM_EMBED_TOOL} ${CMAKE_BINARY_DIR}/embedded_data.cpp setup::embedded::data ${LM_EMBEDDED_FILES}
+    DEPENDS ${LM_EMBED_TOOL} ${_embed_deps}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Embedding setup data"
     VERBATIM)
@@ -229,6 +298,7 @@ endif ()
 # Packaging: `cmake --install build/<preset> --prefix <dir>` lays out a release folder.
 # LM_LLVM_DIR (an LLVM bin directory) supplies the bundled clang and lld-link / ld.lld.
 set(LM_LLVM_DIR "${_cxx_dir}" CACHE PATH "LLVM bin directory whose clang and lld-link (Windows) / ld.lld (Linux) are bundled on install")
+if (NOT LM_MOBILE)
 install(TARGETS LuigisMansionRecomp RUNTIME DESTINATION .)
 install(FILES NOTICE.md DESTINATION .)
 install(FILES data/pipelines.bin DESTINATION .)
@@ -283,6 +353,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     install(PROGRAMS packaging/linux/LuigisMansionRecompiled.sh DESTINATION .)
     install(FILES packaging/linux/README.txt DESTINATION .)
 endif ()
+endif ()  # NOT LM_MOBILE
 
 # lmrecomp: developer build with the game recompiled at build time and linked in
 # statically (debuggable, no setup). LM_DOL is the user's own main.dol; LM_DOL_VERSION
@@ -290,7 +361,7 @@ endif ()
 set(LM_DOL "${CMAKE_SOURCE_DIR}/Luigis Mansion US/sys/main.dol" CACHE FILEPATH
     "Path to your Luigi's Mansion main.dol, extracted from your own disc")
 set(LM_DOL_VERSION "GLME01" CACHE STRING "Release of LM_DOL: GLME01 (USA) or GLMP01 (Europe)")
-if (EXISTS ${LM_DOL})
+if (EXISTS ${LM_DOL} AND NOT LM_MOBILE)
     set(LM_RECOMP_DIR ${CMAKE_BINARY_DIR}/recomp_gen)
     if (LM_DOL_VERSION STREQUAL "GLMP01")
         set(_recomp_cfg --symbols ${CMAKE_SOURCE_DIR}/decomp/config/GLMP01_00/symbols.txt

@@ -30,7 +30,11 @@
 #include "recomp/precache.h"
 #include "recomp/runtime.h"
 #include "recomp/sched.h"
+#include "recomp/touch.h"
 #include "recomp/widescreen.h"
+#ifdef LM_MOBILE
+#include "port/mobile.h"
+#endif
 #ifndef LM_STATIC_MODULE
 #include "setup/setup.h"
 #endif
@@ -188,6 +192,9 @@ void hangDetail(char* out, size_t size, bool stallBegins) {
 
 int main(int argc, char* argv[]) {
     using namespace recomp;
+#ifdef LM_MOBILE
+    port::mobile::init();
+#endif
     // Windows: no console window for players; output to a terminal, a redirect or last_run.log.
     port::recovery::setupConsole(argc, argv);
     port::installCrashHandler();
@@ -318,6 +325,7 @@ int main(int argc, char* argv[]) {
         if (SDL_Window* w = aurora_get_window()) SDL_MaximizeWindow(w);
     precache::init();
     ws::init();
+    touch::init();
     port::setPhase("loading the game");
     gx::installFifoErrorReport();
 
@@ -545,6 +553,7 @@ int main(int argc, char* argv[]) {
 
     port::setPhase("shutdown (releasing graphics objects, writing caches)");
     menu::shutdown();
+    touch::shutdown();
     vi::stopTimer();
     frame::stop();
     audio::outShutdown();

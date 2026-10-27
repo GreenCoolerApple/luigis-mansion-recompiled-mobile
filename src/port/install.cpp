@@ -25,6 +25,9 @@
 #include <mach-o/dyld.h>
 #include <sys/sysctl.h>
 #endif
+#ifdef LM_MOBILE
+#include "port/mobile.h"
+#endif
 
 namespace port {
 namespace {
@@ -189,12 +192,17 @@ fs::path sysDir(Kind kind, bool create) {
 #ifdef __APPLE__
     const char* fallback = kind == Kind::Cache ? "Library/Caches" : "Library/Application Support";
 #else
-    const char* fallback = kind == Kind::Config ? ".config" : kind == Kind::Data ? ".local/share" : ".cache";
+    [[maybe_unused]] const char* fallback = kind == Kind::Config ? ".config" : kind == Kind::Data ? ".local/share" : ".cache";
 #endif
     fs::path base;
+#ifdef __ANDROID__
+    if (const char* v = std::getenv(var); v && v[0] == '/') base = v;
+    else base = mobile::storageRoot() / (kind == Kind::Cache ? "cache" : kind == Kind::Config ? "config" : "data");
+#else
     if (const char* v = std::getenv(var); v && v[0] == '/') base = v;
     else if (const char* home = std::getenv("HOME"); home && home[0]) base = fs::path(home) / fallback;
     else base = ".";
+#endif
     // Once per base folder (config, data and cache are separate on Linux).
     static std::mutex sM;
     static std::vector<fs::path> sDone;
@@ -870,6 +878,9 @@ fs::path selfExePath() {
 }
 
 fs::path selfExeDir() {
+#ifdef LM_MOBILE
+    return mobile::bundleDir();
+#endif
     const fs::path p = selfExePath();
     if (!p.empty()) return p.parent_path();
     std::error_code ec;
@@ -879,6 +890,12 @@ fs::path selfExeDir() {
 #endif
 
 void relaunch(bool setup, const std::filesystem::path& exePath) {
+#ifdef LM_MOBILE
+    (void)exePath;
+    if (setup) mobile::requestSetup();
+    std::fflush(nullptr);
+    std::_Exit(0);
+#endif
 #ifdef _WIN32
     wchar_t exe[MAX_PATH * 4];
     GetModuleFileNameW(nullptr, exe, DWORD(std::size(exe)));

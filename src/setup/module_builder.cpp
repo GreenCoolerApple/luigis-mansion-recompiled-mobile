@@ -6,6 +6,9 @@
 #include "recomp/ctx.h"
 #include "recompiler/recompiler.h"
 #include "setup/embedded.h"
+#ifdef LM_MOBILE
+#include "port/mobile.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -43,19 +46,56 @@ namespace {
 // guest threads (OSExitThread, OSCancelThread, shutdown) by throwing sched::ThreadExit through
 // the module's frames, which Windows can only unwind with .pdata and Linux with .eh_frame
 // (+ the .eh_frame_hdr lookup table the linker writes).
-#ifdef _WIN32
+struct TargetSpec {
+    std::vector<std::string> compile;
+    std::vector<std::string> link;
+    const char* moduleFile;
+    const char* objExt;
+    bool msvcLink;
+    bool embedKey;
+    const char* installNamePrefix;
+};
+
+const TargetSpec& androidSpec() {
+    static const TargetSpec s{
+        {"--target=aarch64-linux-android29", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden", "-ffreestanding",
+         "-nostdinc", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno",
+         "-fno-stack-protector", "-ffp-contract=off", "-mno-outline-atomics", "-funwind-tables",
+         "-Wno-unused-label", "-Wno-unused-variable"},
+        {"-flavor", "gnu", "-shared", "-nostdlib", "--eh-frame-hdr", "-Bsymbolic", "-z", "defs", "-z", "noexecstack",
+         "-z", "now", "-z", "max-page-size=16384", "-O1", "--hash-style=both", "-soname", "lm_game_module.so"},
+        "module.so", ".o", false, true, nullptr};
+    return s;
+}
+
+const TargetSpec& iosSpec() {
+    static const TargetSpec s{
+        {"--target=arm64-apple-ios15.0", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden", "-ffreestanding",
+         "-nostdinc", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno",
+         "-fno-stack-protector", "-ffp-contract=off", "-funwind-tables", "-Wno-unused-label",
+         "-Wno-unused-variable"},
+        {"-flavor", "darwin", "-dylib", "-arch", "arm64", "-platform_version", "ios", "15.0", "15.0",
+         "-undefined", "error", "-dead_strip", "-O1"},
+        "module.dylib", ".o", false, true, "@rpath/lm_game_"};
+    return s;
+}
+
+#if defined(__ANDROID__)
+const TargetSpec& hostSpec() { return androidSpec(); }
+#elif defined(LM_MOBILE) && defined(__APPLE__)
+const TargetSpec& hostSpec() { return iosSpec(); }
+#elif defined(_WIN32)
 // Windows: stack probes stay on (module_rt.cpp provides __chkstk: a generated function with
 // a frame above a page would otherwise skip the stack guard page and fault; SMS port fix).
-const std::vector<std::string> kCompileFlags = {
-    "--target=x86_64-pc-windows-msvc", "-std=c++20", "-O2", "-ffreestanding", "-nostdinc", "-fno-exceptions",
-    "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno", "-fno-stack-protector", "-funwind-tables",
-    "-Wno-unused-label", "-Wno-unused-variable"};
-const std::vector<std::string> kLinkFlags = {"/dll", "/noentry", "/nodefaultlib", "/machine:x64", "/opt:ref",
-                                             "/incremental:no"};
-constexpr const char* kModuleFile = "module.dll";
-constexpr const char* kObjExt = ".obj";
-constexpr const char* kExeSuffix = ".exe";
-constexpr const char* kLinkerName = "lld-link";
+const TargetSpec& hostSpec() {
+    static const TargetSpec s{
+        {"--target=x86_64-pc-windows-msvc", "-std=c++20", "-O2", "-ffreestanding", "-nostdinc", "-fno-exceptions",
+         "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno", "-fno-stack-protector", "-funwind-tables",
+         "-Wno-unused-label", "-Wno-unused-variable"},
+        {"/dll", "/noentry", "/nodefaultlib", "/machine:x64", "/opt:ref", "/incremental:no"},
+        "module.dll", ".obj", true, false, nullptr};
+    return s;
+}
 #elif defined(__APPLE__)
 // macOS (docs/MACOS.md): a Mach-O dylib for the host architecture, linked by ld64.lld without
 // the SDK (the module needs nothing from libSystem). Same visibility rules as Linux: only
@@ -67,35 +107,54 @@ constexpr const char* kLinkerName = "lld-link";
 #else
 #define LM_MODULE_ARCH "x86_64"
 #endif
-const std::vector<std::string> kCompileFlags = {
-    "--target=" LM_MODULE_ARCH "-apple-macos13.0", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden",
-    "-ffreestanding", "-nostdinc", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno",
-    "-fno-stack-protector", "-ffp-contract=off", "-funwind-tables", "-Wno-unused-label", "-Wno-unused-variable"};
-const std::vector<std::string> kLinkFlags = {"-dylib", "-arch", LM_MODULE_ARCH, "-platform_version", "macos", "13.0",
-                                             "13.0", "-install_name", "@rpath/lm_game_module.dylib",
-                                             "-undefined", "error", "-dead_strip", "-O1"};
-constexpr const char* kModuleFile = "module.dylib";
-constexpr const char* kObjExt = ".o";
-constexpr const char* kExeSuffix = "";
-constexpr const char* kLinkerName = "ld64.lld";
+const TargetSpec& hostSpec() {
+    static const TargetSpec s{
+        {"--target=" LM_MODULE_ARCH "-apple-macos13.0", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden",
+         "-ffreestanding", "-nostdinc", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno",
+         "-fno-stack-protector", "-ffp-contract=off", "-funwind-tables", "-Wno-unused-label", "-Wno-unused-variable"},
+        {"-dylib", "-arch", LM_MODULE_ARCH, "-platform_version", "macos", "13.0", "13.0", "-install_name",
+         "@rpath/lm_game_module.dylib", "-undefined", "error", "-dead_strip", "-O1"},
+        "module.dylib", ".o", false, false, nullptr};
+    return s;
+}
 #else
 // Linux: a position-independent shared object. Everything is hidden and bound locally
 // (-fvisibility=hidden, -Bsymbolic) except lm_module_init, so the module's g_mem, memcpy, ...
 // can never be interposed by the executable's or libc's symbols. -z defs turns a missing
 // helper (one the compiler calls that module_rt.cpp does not provide) into a link error
 // instead of a dlopen failure.
-const std::vector<std::string> kCompileFlags = {
-    "--target=x86_64-pc-linux-gnu", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden", "-ffreestanding",
-    "-nostdinc", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno",
-    "-fno-stack-protector", "-funwind-tables", "-Wno-unused-label", "-Wno-unused-variable"};
-const std::vector<std::string> kLinkFlags = {"-shared", "-nostdlib", "--eh-frame-hdr", "-Bsymbolic",
-                                             "-z", "defs", "-z", "noexecstack", "-z", "now", "-O1",
-                                             "--hash-style=both", "-soname", "lm_game_module.so"};
-constexpr const char* kModuleFile = "module.so";
-constexpr const char* kObjExt = ".o";
-constexpr const char* kExeSuffix = "";
-constexpr const char* kLinkerName = "ld.lld";
+const TargetSpec& hostSpec() {
+    static const TargetSpec s{
+        {"--target=x86_64-pc-linux-gnu", "-std=c++20", "-O2", "-fPIC", "-fvisibility=hidden", "-ffreestanding",
+         "-nostdinc", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics", "-fno-math-errno",
+         "-fno-stack-protector", "-funwind-tables", "-Wno-unused-label", "-Wno-unused-variable"},
+        {"-shared", "-nostdlib", "--eh-frame-hdr", "-Bsymbolic", "-z", "defs", "-z", "noexecstack", "-z", "now", "-O1",
+         "--hash-style=both", "-soname", "lm_game_module.so"},
+        "module.so", ".o", false, false, nullptr};
+    return s;
+}
 #endif
+
+const TargetSpec& specFor(ModuleTarget t) {
+    switch (t) {
+    case ModuleTarget::Android: return androidSpec();
+    case ModuleTarget::Ios: return iosSpec();
+    default: return hostSpec();
+    }
+}
+
+#ifdef _WIN32
+[[maybe_unused]] constexpr const char* kExeSuffix = ".exe";
+[[maybe_unused]] constexpr const char* kLinkerName = "lld-link";
+#elif defined(__APPLE__)
+[[maybe_unused]] constexpr const char* kExeSuffix = "";
+[[maybe_unused]] constexpr const char* kLinkerName = "ld64.lld";
+#else
+[[maybe_unused]] constexpr const char* kExeSuffix = "";
+[[maybe_unused]] constexpr const char* kLinkerName = "ld.lld";
+#endif
+
+constexpr const char* kKeyMarker = "LMMODKEY:";
 
 // Paths here are plain (they are also clang/lld arguments, which take no \\?\ prefix; LLVM
 // itself handles plain paths past MAX_PATH). Our own file calls go through port::longPath, so a
@@ -108,13 +167,14 @@ bool writeText(const std::filesystem::path& p, std::string_view text) {
     return bool(o);
 }
 
-std::string utf8(const std::filesystem::path& p) { return port::displayPath(p); }
+[[maybe_unused]] std::string utf8(const std::filesystem::path& p) { return port::displayPath(p); }
 
 std::string readText(const std::filesystem::path& p) {
     std::ifstream in(longPath(p), std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(in), {});
 }
 
+#ifndef LM_MOBILE
 #ifdef _WIN32
 std::wstring widen(const std::string& s) {
     if (s.empty()) return {};
@@ -237,13 +297,28 @@ bool toolAtShortPath(std::filesystem::path& tool, std::string& error) {
     return true;
 }
 #endif
+#endif  // LM_MOBILE
 
 }  // namespace
 
 std::filesystem::path moduleDir(port::GameVersion v) { return port::dataDir() / "game" / port::gameId(v); }
-std::filesystem::path modulePath(port::GameVersion v) { return moduleDir(v) / kModuleFile; }
 
-std::string moduleKey(const Disc& disc) {
+const char* targetLabel(ModuleTarget t) {
+    switch (t) {
+    case ModuleTarget::Android: return "android-arm64";
+    case ModuleTarget::Ios: return "ios-arm64";
+    default: return "host";
+    }
+}
+
+std::string mobileModuleName(port::GameVersion v, ModuleTarget t) {
+    return std::string("lm_game_") + port::gameId(v) + (t == ModuleTarget::Ios ? ".dylib" : ".so");
+}
+
+std::filesystem::path exportDir(ModuleTarget t) { return port::dataDir() / "mobile" / targetLabel(t); }
+
+std::string moduleKey(const Disc& disc, ModuleTarget target) {
+    const TargetSpec& spec = specFor(target);
     const bool pal = disc.version() == port::GameVersion::PAL;
     std::string text = "abi " + std::to_string(recomp::kModuleAbiVersion) + "\n";
     // The program version: an update (docs/SETUP.md "Updates") always rebuilds the module, also
@@ -251,8 +326,8 @@ std::string moduleKey(const Disc& disc) {
     // bundled clang/lld).
     text += std::string("program ") + port::update::buildVersion() + "\n";
     text += std::string("game ") + port::gameId(disc.version()) + " " + disc.dolSha1() + "\n";
-    for (auto& f : kCompileFlags) text += f + " ";
-    for (auto& f : kLinkFlags) text += f + " ";
+    for (auto& f : spec.compile) text += f + " ";
+    for (auto& f : spec.link) text += f + " ";
     for (std::string_view part : {embedded::symbols(pal), embedded::splits(pal), embedded::versionMap(pal),
                                   embedded::hooks(), embedded::ctxHeader(), embedded::moduleAbiHeader(),
                                   embedded::moduleRt(), embedded::recompilerSource()}) {
@@ -263,12 +338,40 @@ std::string moduleKey(const Disc& disc) {
     return hex(d.data(), d.size());
 }
 
-bool moduleUpToDate(const Disc& disc) {
-    const auto dir = moduleDir(disc.version());
-    std::error_code ec;
-    return std::filesystem::exists(longPath(dir / kModuleFile), ec) && readText(dir / "module.key") == moduleKey(disc);
+namespace {
+
+bool readEmbeddedMarker(const std::filesystem::path& file, std::string& key, std::string& game) {
+    const std::string data = readText(file);
+    const std::string marker = kKeyMarker;
+    for (size_t pos = data.find(marker); pos != std::string::npos; pos = data.find(marker, pos + 1)) {
+        const size_t begin = pos + marker.size();
+        if (begin + 40 + 1 + 6 + 4 > data.size()) break;
+        if (data[begin + 40] != ':' || data.compare(begin + 47, 4, ":END") != 0) continue;
+        key = data.substr(begin, 40);
+        game = data.substr(begin + 41, 6);
+        return true;
+    }
+    return false;
 }
 
+}
+
+std::string embeddedModuleKey(const std::filesystem::path& file) {
+    std::string key, game;
+    return readEmbeddedMarker(file, key, game) ? key : std::string();
+}
+
+std::string embeddedModuleGame(const std::filesystem::path& file) {
+    std::string key, game;
+    return readEmbeddedMarker(file, key, game) ? game : std::string();
+}
+
+#ifdef LM_MOBILE
+bool findToolchain(std::filesystem::path&, std::filesystem::path&, std::string& error) {
+    error = "The game module is built on a PC (docs/MOBILE.md).";
+    return false;
+}
+#else
 bool findToolchain(std::filesystem::path& clang, std::filesystem::path& lld, std::string& error) {
     const char* exe = kExeSuffix;
     std::vector<std::filesystem::path> dirs{exeDir() / "llvm" / "bin"};
@@ -324,7 +427,11 @@ bool findToolchain(std::filesystem::path& clang, std::filesystem::path& lld, std
     return false;
 }
 
-bool buildModule(const Disc& disc, const Progress& progress, std::string& error) {
+namespace {
+
+bool buildInto(const Disc& disc, ModuleTarget target, const std::filesystem::path& dir, const std::string& outName,
+               const Progress& progress, std::string& error) {
+    const TargetSpec& spec = specFor(target);
     auto report = [&](const std::string& s, float f) {
         if (progress.report) progress.report(s, f);
     };
@@ -349,13 +456,12 @@ bool buildModule(const Disc& disc, const Progress& progress, std::string& error)
 #ifdef _WIN32
     if (!toolAtShortPath(clang, error) || !toolAtShortPath(lld, error)) return false;
 #endif
-    std::printf("[setup] building the %s game module with %s and %s\n", port::gameId(disc.version()),
-                utf8(clang).c_str(), utf8(lld).c_str());
+    std::printf("[setup] building the %s game module (%s) with %s and %s\n", port::gameId(disc.version()),
+                targetLabel(target), utf8(clang).c_str(), utf8(lld).c_str());
     std::fflush(stdout);
     const auto buildStart = std::chrono::steady_clock::now();
 
     const bool pal = disc.version() == port::GameVersion::PAL;
-    const auto dir = moduleDir(disc.version());
     const auto work = dir / "build";
     std::error_code ec;
     std::filesystem::remove_all(longPath(work), ec);
@@ -390,6 +496,13 @@ bool buildModule(const Disc& disc, const Progress& progress, std::string& error)
     writeText(work / "include" / "recomp" / "module_abi.h", embedded::moduleAbiHeader());
     writeText(work / "src" / "module_rt.cpp", embedded::moduleRt());
     sources.push_back(work / "src" / "module_rt.cpp");
+    if (spec.embedKey) {
+        const std::string key = moduleKey(disc, target);
+        writeText(work / "src" / "module_key.cpp",
+                  "extern \"C\" __attribute__((used, visibility(\"default\"))) const char lm_module_key[] = \"" +
+                      std::string(kKeyMarker) + key + ":" + port::gameId(disc.version()) + ":END\";\n");
+        sources.push_back(work / "src" / "module_key.cpp");
+    }
     writeText(work / "recompiler.log", out.summary + "\n");
     if (cancelled()) return false;
 
@@ -413,10 +526,10 @@ bool buildModule(const Disc& disc, const Progress& progress, std::string& error)
             }
             const auto& src = sources[i];
             auto obj = work / "obj" / src.stem();
-            obj += kObjExt;
+            obj += spec.objExt;
             auto log = work / "obj" / src.stem();
             log += ".log";
-            std::vector<std::string> args(kCompileFlags.begin(), kCompileFlags.end());
+            std::vector<std::string> args(spec.compile.begin(), spec.compile.end());
             args.push_back("-I" + utf8(work / "include"));
             args.push_back("-c");
             args.push_back(utf8(src));
@@ -446,32 +559,38 @@ bool buildModule(const Disc& disc, const Progress& progress, std::string& error)
 
     // 3. Link.
     report("Linking the game module", 0.96f);
-    const auto tmpDll = work / kModuleFile;
-    std::vector<std::string> args(kLinkFlags.begin(), kLinkFlags.end());
-#ifdef _WIN32
-    args.push_back("/out:" + utf8(tmpDll));
-    args.push_back("/implib:" + utf8(work / "module.lib"));
-#else
-    args.push_back("-o");
-    args.push_back(utf8(tmpDll));
-#endif
+    const auto tmpDll = work / spec.moduleFile;
+    std::vector<std::string> args(spec.link.begin(), spec.link.end());
+    if (spec.installNamePrefix) {
+        args.push_back("-install_name");
+        args.push_back(std::string(spec.installNamePrefix) + port::gameId(disc.version()) + ".dylib");
+    }
+    if (spec.msvcLink) {
+        args.push_back("/out:" + utf8(tmpDll));
+        args.push_back("/implib:" + utf8(work / "module.lib"));
+    } else {
+        args.push_back("-o");
+        args.push_back(utf8(tmpDll));
+    }
     for (const auto& s : sources) {
         auto obj = work / "obj" / s.stem();
-        obj += kObjExt;
+        obj += spec.objExt;
         args.push_back(utf8(obj));
     }
     if (const int rc = run(lld, args, work / "link.log"); rc != 0) {
         error = "Linking the game module failed (exit " + std::to_string(rc) + "):\n" + readText(work / "link.log").substr(0, 2000);
         return false;
     }
-    std::filesystem::remove(longPath(dir / kModuleFile), ec);
-    std::filesystem::rename(longPath(tmpDll), longPath(dir / kModuleFile), ec);
+    std::filesystem::remove(longPath(dir / outName), ec);
+    std::filesystem::rename(longPath(tmpDll), longPath(dir / outName), ec);
     if (ec) {
         error = "Could not install the game module: " + ec.message();
         return false;
     }
-    writeText(dir / "module.key", moduleKey(disc));
-    writeText(dir / "recompiler.log", out.summary + "\n");
+    if (target == ModuleTarget::Host) {
+        writeText(dir / "module.key", moduleKey(disc, target));
+        writeText(dir / "recompiler.log", out.summary + "\n");
+    }
     // Generated code is derived from the user's game; keep it only while building.
     if (!std::getenv("LM_KEEP_BUILD")) std::filesystem::remove_all(longPath(work), ec);
     std::printf("[setup] game module built in %.1f s (%u compile jobs)\n",
@@ -480,5 +599,160 @@ bool buildModule(const Disc& disc, const Progress& progress, std::string& error)
     report("Done", 1.0f);
     return true;
 }
+
+}
+
+#endif  // LM_MOBILE
+
+#ifndef LM_MOBILE
+ModuleTarget hostTarget() { return ModuleTarget::Host; }
+
+std::filesystem::path modulePath(port::GameVersion v) { return moduleDir(v) / hostSpec().moduleFile; }
+
+bool moduleUpToDate(const Disc& disc) {
+    const auto dir = moduleDir(disc.version());
+    std::error_code ec;
+    return std::filesystem::exists(longPath(dir / hostSpec().moduleFile), ec) &&
+           readText(dir / "module.key") == moduleKey(disc);
+}
+
+bool buildModule(const Disc& disc, const Progress& progress, std::string& error) {
+    return buildInto(disc, ModuleTarget::Host, moduleDir(disc.version()), hostSpec().moduleFile, progress, error);
+}
+
+bool exportModule(const Disc& disc, ModuleTarget target, const Progress& progress, std::filesystem::path& out,
+                  std::string& error) {
+    const auto dir = exportDir(target);
+    std::error_code ec;
+    std::filesystem::create_directories(longPath(dir), ec);
+    const std::string name = mobileModuleName(disc.version(), target);
+    if (!buildInto(disc, target, dir, name, progress, error)) return false;
+    out = dir / name;
+    return true;
+}
+#else
+namespace {
+
+namespace fs = std::filesystem;
+
+std::vector<fs::path> mobileCandidates(port::GameVersion v, bool includeImports) {
+    std::vector<fs::path> found;
+    const std::string want = mobileModuleName(v, hostTarget());
+    const std::string stem = want.substr(0, want.find('.'));
+    const std::string ext = want.substr(want.find('.'));
+    auto consider = [&](const fs::path& p) {
+        const std::string name = p.filename().string();
+        if (name.rfind(stem, 0) == 0 && p.extension().string() == ext) found.push_back(p);
+    };
+    std::error_code ec;
+#ifdef __APPLE__
+    for (auto it = fs::recursive_directory_iterator(port::mobile::bundleDir(), ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        std::error_code e2;
+        if (it->is_regular_file(e2)) consider(it->path());
+    }
+#endif
+    if (includeImports) {
+        ec.clear();
+        for (auto it = fs::directory_iterator(port::mobile::importDir(), ec); !ec && it != fs::directory_iterator();
+             it.increment(ec)) {
+            std::error_code e2;
+            if (it->is_regular_file(e2)) consider(it->path());
+        }
+    }
+    return found;
+}
+
+#ifdef __APPLE__
+fs::path bundledModule(port::GameVersion v, const std::string* key) {
+    for (const auto& c : mobileCandidates(v, false))
+        if (!key || embeddedModuleKey(c) == *key) return c;
+    return {};
+}
+#endif
+
+}
+
+ModuleTarget hostTarget() {
+#ifdef __APPLE__
+    return ModuleTarget::Ios;
+#else
+    return ModuleTarget::Android;
+#endif
+}
+
+std::filesystem::path modulePath(port::GameVersion v) {
+#ifdef __APPLE__
+    if (auto p = bundledModule(v, nullptr); !p.empty()) return p;
+#endif
+    return moduleDir(v) / hostSpec().moduleFile;
+}
+
+bool moduleUpToDate(const Disc& disc) {
+#ifdef __APPLE__
+    const std::string key = moduleKey(disc);
+    return !bundledModule(disc.version(), &key).empty();
+#else
+    const auto dir = moduleDir(disc.version());
+    std::error_code ec;
+    return std::filesystem::exists(dir / hostSpec().moduleFile, ec) && readText(dir / "module.key") == moduleKey(disc);
+#endif
+}
+
+bool buildModule(const Disc& disc, const Progress& progress, std::string& error) {
+    if (progress.report) progress.report("Looking for the game module exported on your PC", 0.1f);
+    const std::string key = moduleKey(disc);
+    const std::string name = mobileModuleName(disc.version(), hostTarget());
+    const auto candidates = mobileCandidates(disc.version(), true);
+    bool stale = false;
+    for (const auto& c : candidates) {
+        if (embeddedModuleKey(c) != key) {
+            stale = true;
+            continue;
+        }
+#ifdef __APPLE__
+        if (c.parent_path() == port::mobile::importDir()) {
+            error = name + " is in the app's Documents folder, but iOS only loads code that is signed inside the "
+                           "app. Put it into the IPA with tools/mobile/inject_ios_module.py (or your sideloading "
+                           "tool's \"inject dylib\" option) and install the app again (docs/MOBILE.md).";
+            return false;
+        }
+        if (progress.report) progress.report("Done", 1.0f);
+        return true;
+#else
+        const auto dir = moduleDir(disc.version());
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const auto tmp = dir / "module.so.tmp";
+        fs::copy_file(c, tmp, fs::copy_options::overwrite_existing, ec);
+        if (!ec) fs::rename(tmp, dir / hostSpec().moduleFile, ec);
+        if (ec) {
+            error = "Could not copy the game module into the app: " + ec.message();
+            return false;
+        }
+        writeText(dir / "module.key", key);
+        if (progress.report) progress.report("Done", 1.0f);
+        return true;
+#endif
+    }
+    const std::string where = port::displayPath(port::mobile::importDir());
+    if (stale)
+        error = name + " was exported by a different version of the game, or from a different disc image. Export it "
+                       "again on your PC with the same version of Luigi's Mansion Recompiled as this app, from the "
+                       "same disc (docs/MOBILE.md).";
+    else
+        error = "The game module " + name + " is missing. On your PC, open Luigi's Mansion Recompiled, choose this "
+                "disc and press \"Export for " +
+                std::string(hostTarget() == ModuleTarget::Ios ? "iPhone / iPad" : "Android") + "\", then " +
+                (hostTarget() == ModuleTarget::Ios ? std::string("put it into the IPA (docs/MOBILE.md).")
+                                                   : "copy " + name + " into " + where + " or use \"Import a file\".");
+    return false;
+}
+
+bool exportModule(const Disc&, ModuleTarget, const Progress&, std::filesystem::path&, std::string& error) {
+    error = "Exporting is done on a PC.";
+    return false;
+}
+#endif
 
 }  // namespace setup

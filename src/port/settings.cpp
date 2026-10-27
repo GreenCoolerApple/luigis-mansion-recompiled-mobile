@@ -74,6 +74,9 @@ std::vector<Field> fields() {
     return {
         num("interface", "menu_scale", sSettings.ui.menuScale),
         flag("interface", "start_hint", sSettings.ui.startHint),
+        flag("interface", "touch_controls", sSettings.ui.touchControls),
+        num("interface", "touch_opacity", sSettings.ui.touchOpacity),
+        num("interface", "touch_size", sSettings.ui.touchSize),
         num("video", "target_fps", v.targetFps),
         flag("video", "unlimited_fps", v.unlimitedFps),
         flag("video", "match_display_refresh", v.matchDisplay),
@@ -318,6 +321,8 @@ void sanitize() {
     auto& v = sSettings.video;
     // Menu size: 0 (Auto) or a percentage (the UI snaps it to its nearest step).
     if (sSettings.ui.menuScale != 0) clampTo(sSettings.ui.menuScale, 75, 300);
+    clampTo(sSettings.ui.touchOpacity, 10, 100);
+    clampTo(sSettings.ui.touchSize, 50, 200);
     clampTo(v.targetFps, kMinFps, kMaxFps);
     clampEnum(v.aspect, AspectMode::Ultra32x9, AspectMode::Auto);
     clampTo(v.resolutionScale, 0, 8);

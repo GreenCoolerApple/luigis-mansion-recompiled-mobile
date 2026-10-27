@@ -2,6 +2,7 @@
 // Drawn with Aurora's Dear ImGui on the host thread between the guest's present
 // and aurora_end_frame. While it is open the game receives neutral pad input.
 #include "recomp/menu.h"
+#include "recomp/touch.h"
 #include "recomp/gx_bridge.h"
 
 #include "port/install.h"
@@ -1491,6 +1492,13 @@ void visualsTab() {
     sDirty |= recomp::menu::Checkbox("Show \"Press F1\" hint at start", &port::settings().ui.startHint);
     ImGui::SetItemTooltip("A small notice in the top-left corner for the first seconds of play saying that F1\n"
                           "opens this menu. It is not shown again in a session once the menu has been opened.");
+    if (recomp::touch::available()) {
+        ImGui::SeparatorText("Touch controls");
+        sDirty |= recomp::menu::Checkbox("Show touch controls", &port::settings().ui.touchControls);
+        ImGui::SetItemTooltip("On-screen GameCube controller. Hidden while a real controller is connected.");
+        sDirty |= recomp::menu::SliderInt("Touch controls opacity", &port::settings().ui.touchOpacity, 10, 100, "%d%%");
+        sDirty |= recomp::menu::SliderInt("Touch controls size", &port::settings().ui.touchSize, 50, 200, "%d%%");
+    }
     ImGui::SeparatorText("Frame rate and view");
     frameRateControls(v);
     static const char* kAspects[] = {"Original 4:3", "Match window", "16:9", "16:10", "21:9", "32:9"};
@@ -1961,11 +1969,20 @@ void shutdown() {
     }
 }
 
+void toggle() {
+    sOpen = !sOpen;
+    if (!sOpen && sDirty) {
+        port::saveSettings();
+        sDirty = false;
+    }
+}
+
 void handleEvent(const SDL_Event& ev) {
+    if (recomp::touch::handleEvent(ev)) return;
     if (recomp::controls::handleEvent(ev)) return;  // binding capture owns the key
     if (recomp::dev::handleKey(ev)) return;
     if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) return;
-    if (ev.key.key == SDLK_F1) sOpen = !sOpen;
+    if (ev.key.key == SDLK_F1 || ev.key.key == SDLK_AC_BACK) sOpen = !sOpen;
     else if (ev.key.key == SDLK_ESCAPE && sOpen) sOpen = false;
     if (!sOpen && sDirty) {
         port::saveSettings();
@@ -2095,6 +2112,7 @@ bool SliderInt(const char* label, int* v, int min, int max, const char* format, 
 
 void draw() {
     click::frame();
+    recomp::touch::draw(isOpen());
     scriptedSettings();
     skip::drawOverlay();
     recomp::gx::applyAccuracySettings();

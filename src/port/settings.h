@@ -351,6 +351,9 @@ struct UpdateSettings {
 struct InterfaceSettings {
     int menuScale = 0;  // percent (75..300, ui::kSteps); 0 = Auto (window height / display scaling)
     bool startHint = true;  // "Press F1 for options" notice for the first seconds of play (menu.cpp)
+    bool touchControls = true;
+    int touchOpacity = 55;
+    int touchSize = 100;
 };
 
 struct Settings {

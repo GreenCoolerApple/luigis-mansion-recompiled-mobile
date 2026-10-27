@@ -1,0 +1,60 @@
+plugins {
+    id 'com.android.application'
+}
+
+def lmVersion = project.findProperty('lmVersion') ?: '0.0'
+def lmVersionCode = (project.findProperty('lmVersionCode') ?: '1') as int
+
+android {
+    namespace = 'io.github.lmrecompiled.mobile'
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = 'io.github.lmrecompiled.mobile'
+        minSdk = 29
+        targetSdk = 35
+        versionCode = lmVersionCode
+        versionName = lmVersion
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    signingConfigs {
+        release {
+            def ks = System.getenv('LM_ANDROID_KEYSTORE')
+            if (ks) {
+                storeFile = file(ks)
+                storePassword = System.getenv('LM_ANDROID_KEYSTORE_PASSWORD')
+                keyAlias = System.getenv('LM_ANDROID_KEY_ALIAS')
+                keyPassword = System.getenv('LM_ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            signingConfig = System.getenv('LM_ANDROID_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['jniLibs']
+            java.srcDirs = ['src/main/java', 'sdl-java', 'aurora-java']
+            assets.srcDirs = ['assets']
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+}

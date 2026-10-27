@@ -25,7 +25,11 @@
 #else
 #include <dirent.h>
 #include <dlfcn.h>
+#if defined(__ANDROID__) && __ANDROID_API__ < 33
+#include "port/backtrace_compat.h"
+#else
 #include <execinfo.h>
+#endif
 #include <unistd.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -175,6 +179,12 @@ void onSignal(int sig, siginfo_t* info, void* uctx) {
         const auto* uc = static_cast<const ucontext_t*>(uctx);
         pc = reinterpret_cast<const void*>(uc->uc_mcontext.gregs[REG_RIP]);
         sp = reinterpret_cast<const void*>(uc->uc_mcontext.gregs[REG_RSP]);
+    }
+#elif defined(__aarch64__)
+    if (uctx) {
+        const auto* uc = static_cast<const ucontext_t*>(uctx);
+        pc = reinterpret_cast<const void*>(uc->uc_mcontext.pc);
+        sp = reinterpret_cast<const void*>(uc->uc_mcontext.sp);
     }
 #endif
     Dl_info dl{};

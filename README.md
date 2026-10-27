@@ -1,5 +1,10 @@
 # Luigi's Mansion Recompiled
 
+> [!WARNING]
+> **The Android and iOS port in this repository is vibe coded.** It was written mostly by an AI
+> assistant, has not been tested on real devices, and is not supported by the PC port's authors.
+> Expect bugs. See [docs/MOBILE.md](docs/MOBILE.md).
+
 **No game data is included.** On first start the game asks for your own disc image (ISO, RVZ and or an extracted game folder) of the USA release (GLME01) and/or the European release (GLMP01). It is recommended to use both the USA and PAL versions of the game to experience every feature available in this port. Once the games are selected, it then builds the game for your PC with the bundled compiler, which takes about 20 to 60 seconds on a decent PC.
 
 
@@ -14,3 +19,6 @@
 
 ## Known issues
 - The 2-player mode (Unused content) is unfinished. The plan is to finish it soon, but for now it's mostly in the state it was left in in the original code.
+
+## Android and iOS (unofficial, vibe coded)
+Phones cannot compile the game themselves, so the game module is exported from the PC version's setup screen ("Play on a phone") and imported into the app. Touch controls are included; a connected controller takes over. Steps, limits and build instructions: [docs/MOBILE.md](docs/MOBILE.md).
